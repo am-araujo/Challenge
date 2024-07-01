@@ -1,6 +1,6 @@
 package org.challenge
 
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 
@@ -23,6 +23,16 @@ object Challenge{
   private def remove_null(df_user_reviews: DataFrame, column_name: String) = {
     val df_no_null = df_user_reviews.withColumn(column_name, when(isnull(col(column_name)), lit(0)).otherwise(col(column_name)))
     df_no_null
+  }
+
+  //Get Apps rated 4.0 or higher and sort them from best to worse rating
+  private def get_best_apps_sorted(df_no_nan_rating: DataFrame) = {
+    //Filter Dataframe by only retrieving Apps with Rating above 4.0
+    val best_ratings = df_no_nan_rating.where(col("Rating") >= 4.0)
+
+    //Assuming the descending order is referent to the Rating and not the name of the App
+    val df_2 = best_ratings.orderBy(desc("Rating"))
+    df_2
   }
 
   //Retrieve record where the highest number of reviews happened, for each App
@@ -74,6 +84,11 @@ object Challenge{
   private def date_conversion(rating_converted: DataFrame) = {
     val date_converted = rating_converted.withColumn("Last_Updated", to_date(col("Last_Updated"), "MMMM d, y"))
     date_converted
+  }
+
+  //Auxiliary function for splitting strings into array of Strings. column_to_split = Column that contains the String to split, delimiter = Delimiter used to split String
+  private def string_splitter(reviews_converted: DataFrame, column_to_split : String, delimiter : String) = {
+    reviews_converted.withColumn(column_to_split, split(col(column_to_split), delimiter))
   }
 
   // Convert column Price to Euros and cast as "Double". First remove the dollar sign, then do the conversion rate between dollars and euros
@@ -135,17 +150,17 @@ object Challenge{
 
     val df_no_nan_rating : DataFrame = remove_nan(df, "Rating")
 
-    //Filter Dataframe by only retrieving Apps with Rating above 4.0
-    var df_2 = df_no_nan_rating.where(col("Rating") >= 4.0)
+    //Get Apps with 4.0 or higher rating sorted
+    val df_2: Dataset[Row] = get_best_apps_sorted(df_no_nan_rating)
 
-    //Assuming the descending order is referent to the Rating and not the name of the App
-    df_2 = df_2.orderBy(desc("Rating"))
+    //Path to save new csv file
+    val df_2_path = "data/best_apps.csv"
 
     //Save Dataframe as a csv and with "§" as delimiter
     df_2.coalesce(1).write
       .option("delimiter", "§")
       .option("header", "true")
-      .csv("data/best_apps.csv")
+      .csv(df_2_path)
 
     //Retrieve columns with max reviews except Category column
     val df_max_review: DataFrame = max_reviewed_record(df)
@@ -171,7 +186,7 @@ object Challenge{
     val reviews_converted = date_converted.withColumn("Reviews", coalesce(col("Reviews").cast("long"), lit(0)))
 
     //Converting from String to array of Strings
-    val genres_converted = reviews_converted.withColumn("Genres", split(col("Genres"), ";"))
+    val genres_converted = string_splitter(reviews_converted, "Genres", ";")
 
     //Converting from Dollars to Euros.
     val df_3 = price_conversion(genres_converted)
@@ -179,8 +194,11 @@ object Challenge{
     //Joining the previous Dataframe(Part 3 of exercise) with the Dataframe produced in Part 1, using App as join condition
     val df_3_1 = df_3.join(df_1, Seq("App"))
 
+    //Path to save new parquet file
+    val df_3_path = "data/googleplaystore_cleaned"
+
     //Saving the new Dataframe as a parquet file using gzip compression
-    df_3_1.write.option("compression", "gzip").parquet("googleplaystore_cleaned")
+    df_3_1.write.option("compression", "gzip").parquet(df_3_path)
 
     val (df_3_exploded: DataFrame, genre_sentiment_average: DataFrame) = sentiment_by_genre(df_no_nan, df_3)
 
@@ -190,8 +208,11 @@ object Challenge{
     //Joining the last two dataframes so we get number of applications, average rating and average sentiment polarity by Genre
     val df_4 = count_average_rating.join(genre_sentiment_average, Seq("Genre"))
 
+    //Path to save new parquet file
+    val df_4_path = "data/googleplaystore_metrics"
+
     //Saving the new Dataframe as a parquet file using gzip compression
-    df_4.write.option("compression", "gzip").parquet("googleplaystore_metrics")
+    df_4.write.option("compression", "gzip").parquet(df_4_path)
 
     spark.stop()
   }
